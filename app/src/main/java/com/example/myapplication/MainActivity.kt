@@ -1,13 +1,14 @@
 package com.example.myapplication
 
+import android.app.Activity
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.media.audiofx.Equalizer
 import android.media.audiofx.Visualizer
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.annotation.FloatRange
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -22,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.util.lerp
 import androidx.core.app.ActivityCompat
@@ -30,16 +30,17 @@ import androidx.core.content.ContextCompat
 import com.example.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.DataInputStream
+import java.lang.Math.log
+import java.lang.Math.pow
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
-import kotlin.random.Random
-import kotlin.random.nextInt
+import kotlin.math.sin
 
 
 class MainActivity : ComponentActivity() {
@@ -72,6 +73,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun easeFunc(x: Float) : Float {
+    // Cubic
+    return 1.0f - pow(1.0 - x.toDouble(), 3.0).toFloat();
+}
+
+
 fun hzToFftIndex(Hz: Int, size : Int, samplingRate: Int): Int {
     return (Hz * size / (44100 * 2)).coerceIn(0, 255);
     // return Math.min(Math.max(Hz * size / (samplingRate / 1000), 0), 255)
@@ -100,7 +107,8 @@ fun getVolumeFrequency(Hz: Int) : Float {
     return lerp(
         beginHz.second.toFloat(),
         endHz.second.toFloat(),
-        (Hz - beginHz.first).toFloat() / (endHz.first - beginHz.first).toFloat()) /// Random.nextDouble(1.0, 1.5).toFloat());
+        easeFunc((Hz - beginHz.first).toFloat() / (endHz.first - beginHz.first).toFloat())
+    ) /// Random.nextDouble(1.0, 1.5).toFloat());
 }
 
 fun transformFftMagnitude(fftBytes : List<Byte>, prevFFTM: DoubleArray, visualizer: Visualizer) : DoubleArray {
@@ -111,9 +119,10 @@ fun transformFftMagnitude(fftBytes : List<Byte>, prevFFTM: DoubleArray, visualiz
     frequencyMap.clear();
     val samplingRate = visualizer.samplingRate;
     val captureSize = visualizer.captureSize;
-    println();
-    print("Data: ");
-    for (k in 0 until fftM.size) {
+    val highFreqGain = 1.5f;
+    val highFreqCutoff = 8000f;
+    println("DC ${fftBytes[0]}, nyan: ${fftBytes[1]}");
+    for (k in 0 until fftBytes.size / 2 - 1) {
         val i = (k + 1) * 2
         var real = fftBytes[i].toDouble();
         var img = fftBytes[i + 1].toDouble();
@@ -123,18 +132,26 @@ fun transformFftMagnitude(fftBytes : List<Byte>, prevFFTM: DoubleArray, visualiz
 //            real /= maxVal;
 //            img /= maxVal;
 //        }
-        fftM[k] = dB((hypot(real, img))) *  (1.0 + (k.toFloat() / fftM.size.toFloat()));
-        print("${fftM[k]} ");
+//        val freq = k * samplingRate / 1000 / captureSize;
+//        if (freq >= highFreqCutoff) {
+//            val aWeight = 1.0f - pow(freq.toDouble() / 20000.0, 2.0).toFloat();
+//            val weightGain = highFreqGain * aWeight;
+//
+//            fftM[k] = fftM[k] * weightGain;
+//        }
+        fftM[k] = dB((hypot(real, img)));
+        fftM[k] = fftM[k] * fftM[k] / 100;
         fftM[k] = (smoothing) * prevFFTM[k] + ((1 - smoothing) * fftM[k]);
     }
-    println();
-    for (i in 0 until fftM.size) {
-        var average = fftM[i];
-        if (i > 0)
-            average += fftM[i - 1];
-        if (i < fftM.size - 1)
-            average += fftM[i + 1];
-        average /= 3;
+    val averageNum = 1;
+    for (i in 0 until fftBytes.size / 2 - 1) {
+        var average = 0.0;
+        var averageCount = 0;
+        for (j in max(0, i - averageNum) until min(fftM.size, i + 1 + averageNum)) {
+            average += fftM[i];
+            averageCount++;
+        }
+        average /= max(averageCount, 1);
         fftM[i] = average;
         val fre = i * (samplingRate / 1000) / captureSize;
         frequencyMap.add(Pair<Int, Double>(fre, fftM[i]));
@@ -159,7 +176,7 @@ fun GreetingImage(modifier: Modifier = Modifier) {
     }
     val visualizer : Visualizer = remember {
         val visualizer : Visualizer = Visualizer(mediaPlayer.audioSessionId);
-        visualizer.setCaptureSize(1024);
+        visualizer.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
         visualizer.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED);
 //        visualizer.setDataCaptureListener(
 //            object : Visualizer.OnDataCaptureListener {
@@ -199,7 +216,6 @@ fun GreetingImage(modifier: Modifier = Modifier) {
                     prevFFTM = fftM;
                 fftM = fftM.copyOfRange(hzToFftIndex(0, fftBytes.size, visualizer.samplingRate),
                     hzToFftIndex(22050, fftBytes.size, visualizer.samplingRate));
-                println("DC: ${fftBytes[0]}");
                 //println(fftBytes);
                 delay(16);
             }
@@ -227,10 +243,8 @@ fun GreetingImage(modifier: Modifier = Modifier) {
         for (i in 0..COUNT) {
             val xOffset: Float = DISTANCE * i - DISTANCE * COUNT / 2;
             var barHeight: Float = 0f;
-            if (i < fftM.size) {
-                barHeight = fftM[i].toFloat() / 200;
-            }
-            barHeight = LINEHEIGHT * ((fftM[i].toFloat() - minVal) / scaleFactor);
+            barHeight = LINEHEIGHT * (fftM[i].toFloat()) / 5;
+            barHeight = LINEHEIGHT * ((fftM[i].toFloat() - minVal) / scaleFactor * lerp(0.5f, maxVal, i.toFloat() / COUNT.toFloat())) / 5;
             drawLine(
                 Color.Red,
                 start = Offset(screenCenter.width + xOffset, screenCenter.height),
@@ -241,23 +255,45 @@ fun GreetingImage(modifier: Modifier = Modifier) {
                 strokeWidth = DISTANCE - 2,
             )
         }
-        var hertz = 0f;
-        var addHz = 2f;
+        var hertz = 5f;
+        var addHz = 0.5f;
+        var barHeight = 0f;
+        val radius = 100f;
         for (i in 0..COUNT) {
             val xOffset: Float = DISTANCE * i - DISTANCE * COUNT / 2;
-            var barHeight = 0f;
-            barHeight = LINEHEIGHT * ((getVolumeFrequency(hertz.roundToInt()) - minVal) / scaleFactor);
+            val angle = i.toFloat() / COUNT.toFloat() * 1.0f * Math.PI;
+            //barHeight = LINEHEIGHT * (getVolumeFrequency(hertz.roundToInt())) / 5;
+            barHeight = (barHeight + LINEHEIGHT *
+                    ((getVolumeFrequency(hertz.roundToInt()) - minVal) / scaleFactor
+                             * lerp(0.5f, maxVal, i.toFloat() / COUNT.toFloat()))
+                    / 5) / 2;
+            // screenWidth + cos(angle)
+            // screenHeight + sin(angle)
+            val direction = Offset(
+                cos(angle - Math.PI / 2).toFloat(),
+                sin(angle - Math.PI / 2).toFloat()
+            );
+            val middle = direction * radius + Offset(screenCenter.width, screenCenter.height) + Offset(0f, -200f);
             drawLine(
                 Color.Blue,
-                start = Offset(screenCenter.width + xOffset, screenCenter.height - 200),
-                end = Offset(
-                    screenCenter.width + xOffset,
-                    screenCenter.height - 200 - barHeight
-                ),
+                start = middle,
+                end = middle + direction * barHeight,
+                strokeWidth = DISTANCE - 2,
+            );
+            val directionMirrored = Offset(
+                x = cos(-angle - Math.PI / 2).toFloat(),
+                y = sin(-angle - Math.PI / 2).toFloat()
+            );
+            val middleMirrored = directionMirrored * radius + Offset(screenCenter.width, screenCenter.height);
+            drawLine(
+                Color.Blue,
+                start = middleMirrored + Offset(0f, -200f),
+                end = middleMirrored + Offset(0f, -200f) + directionMirrored * barHeight,
                 strokeWidth = DISTANCE - 2,
             );
             hertz += addHz;
-            addHz += 0.6f;
+            //hertz = lerp(0.0f, 20000.0f, i.toFloat() / COUNT.toFloat()); // TODO smooth this shit out
+            addHz += 0.4f;
         }
     }
 
